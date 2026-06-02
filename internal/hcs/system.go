@@ -535,6 +535,39 @@ func (computeSystem *System) statisticsInProc(job *jobobject.JobObject) (*hcssch
 	}, nil
 }
 
+// SetSiloCPUGroupAffinities pins the container's server silo to the given processor
+// group affinities. HCS does not expose a CPU-affinity field on the container Processor
+// schema, so for process-isolated (Argon) containers we set the affinity directly on the
+// silo's job object via SetInformationJobObject(JobObjectGroupInformationEx).
+//
+// HCS owns the silo; we only open a transient handle (by the silo's well-known job name,
+// the same handle queryInProc opens) to record the affinity property. The kernel enforces
+// it on every process that joins the silo via AssignProcessToJobObject — including the init
+// process at Start and any descendants it spawns.
+//
+// This must be called after the compute system is created but before it is started, so the
+// affinity is already recorded on the job when HCS assigns the init process. Applying it to
+// an already-running silo is also safe: the kernel re-applies the mask to current members and
+// migrates threads at the next scheduling dispatch.
+func (computeSystem *System) SetSiloCPUGroupAffinities(ctx context.Context, affinities []jobobject.GroupAffinity) (err error) {
+	operation := "hcs::System::SetSiloCPUGroupAffinities"
+
+	jobOptions := &jobobject.Options{
+		UseNTVariant: true,
+		Name:         siloNameFmt(computeSystem.id),
+	}
+	job, err := jobobject.Open(ctx, jobOptions)
+	if err != nil {
+		return makeSystemError(computeSystem, operation, err, nil)
+	}
+	defer job.Close()
+
+	if err := job.SetCPUGroupAffinities(affinities); err != nil {
+		return makeSystemError(computeSystem, operation, err, nil)
+	}
+	return nil
+}
+
 // hcsPropertiesV2Query is a helper to make a HcsGetComputeSystemProperties call using the V2 schema property types.
 func (computeSystem *System) hcsPropertiesV2Query(ctx context.Context, types []hcsschema.PropertyType) (*hcsschema.Properties, error) {
 	operation := "hcs::System::PropertiesV2"
